@@ -5,8 +5,8 @@
         enable = true;
         
         # Identity settings
-        userName = "oryza";
-        userEmail = "example@example.com";
+        userName = "rebatnaath";
+        userEmail = "78601591+rebatnaath@users.noreply.github.com";
 
         signing = {
             format = "openpgp";
