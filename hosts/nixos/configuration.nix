@@ -1,35 +1,42 @@
-# Edit this configuration file to define what should be installed on
-# your system.  Help is available in the configuration.nix(5) man page
-# and in the NixOS manual (accessible by running ‘nixos-help’).
-
 { config, pkgs, ... }:
 
 {
-    imports =
-        [ # Include the results of the hardware scan.
-            ./hardware-configuration.nix
-        ];
+    imports = [
+        ./hardware-configuration.nix
+    ];
 
-    # Bootloader.
+    # home manager
+    home-manager = {
+        useGlobalPkgs = true;
+        useUserPackages = true;
+        backupFileExtension = "backup";
+
+        users.oryza = import ./home.nix;
+    };
+
+    # boot
     boot.loader.systemd-boot.enable = true;
     boot.loader.efi.canTouchEfiVariables = true;
 
-    networking.hostName = "nixos"; # Define your hostname.
-    # networking.wireless.enable = true;  # Enables wireless support via wpa_supplicant.
+    # higher file-watch limits for watchman etc.
+    boot.kernel.sysctl = {
+        "fs.inotify.max_user_watches" = 524288;
+        "fs.inotify.max_user_instances" = 512;
+    };
 
-    # Configure network proxy if necessary
-    # networking.proxy.default = "http://user:password@proxy:port/";
-    # networking.proxy.noProxy = "127.0.0.1,localhost,internal.domain";
-
-    # Enable networking
+    # networking
+    networking.hostName = "nixos";
     networking.networkmanager.enable = true;
 
-    # Set your time zone.
-    time.timeZone = "Asia/Kolkata";
+    networking.firewall.allowedTCPPorts = [ 8081 ];
+    networking.firewall.allowedUDPPortRanges = [
+        { from = 50000; to = 65535; } # webrtc ports for calls
+    ];
 
-    # Select internationalisation properties.
+    # localisation
+    time.timeZone = "Asia/Kathmandu";
+
     i18n.defaultLocale = "en_GB.UTF-8";
-
     i18n.extraLocaleSettings = {
         LC_ADDRESS = "en_IN";
         LC_IDENTIFICATION = "en_IN";
@@ -42,23 +49,42 @@
         LC_TIME = "en_IN";
     };
 
-    # Enable the X11 windowing system.
+    # graphics / desktop
     services.xserver.enable = true;
-
-    # Enable the GNOME Desktop Environment.
-    services.desktopManager.gnome.enable = true;
-    services.displayManager.gdm.enable = true;
-
-    # Configure keymap in X11
     services.xserver.xkb = {
         layout = "us";
         variant = "";
     };
 
-    # Enable CUPS to print documents.
-    services.printing.enable = true;
+    services.desktopManager.gnome.enable = true;
+    services.displayManager.gdm.enable = true;
 
-    # Enable sound with pipewire.
+    # swayfx adds blur, rounded corners and shadows
+    programs.sway = {
+        enable = true;
+        package = pkgs.swayfx;
+        xwayland.enable = true;
+        wrapperFeatures.gtk = true;
+    };
+
+    environment.sessionVariables = {
+        RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
+    };
+
+    # hardware / removable media
+    # mount exfat drives with correct ownership
+    services.udisks2 = {
+        enable = true;
+        settings = {
+            "mount_options.conf" = {
+                "exfat_defaults" = {
+                    "defaults" = "uid=1000,gid=1000,dmask=0000,fmask=0000,iocharset=utf8";
+                };
+            };
+        };
+    };
+
+    # sound
     services.pulseaudio.enable = false;
     security.rtkit.enable = true;
     services.pipewire = {
@@ -66,68 +92,118 @@
         alsa.enable = true;
         alsa.support32Bit = true;
         pulse.enable = true;
-        # If you want to use JACK applications, uncomment this
-        #jack.enable = true;
-
-        # use the example session manager (no others are packaged yet so this is enabled by default,
-        # no need to redefine it in your config for now)
-        #media-session.enable = true;
     };
 
-    # Enable touchpad support (enabled default in most desktopManager).
-    # services.xserver.libinput.enable = true;
+    # printing
+    services.printing.enable = true;
 
+    # virtualisation
     virtualisation.libvirtd.enable = true;
     programs.virt-manager.enable = true;
 
-    # Define a user account. Don't forget to set a password with ‘passwd’.
+    # podman backend for distrobox
+    virtualisation.podman = {
+        enable = true;
+        dockerCompat = true;
+        defaultNetwork.settings.dns_enabled = true;
+    };
+
+    # user
     users.users.oryza = {
         isNormalUser = true;
         description = "Rohan";
-        extraGroups = [ "networkmanager" "wheel" "libvirtd" "kvm" ];
+        shell = pkgs.bashInteractive;
+        extraGroups = [ "networkmanager" "wheel" "libvirtd" "kvm" "adbusers" ];
+
+        # dev toolchains for the whole system
+        
         packages = with pkgs; [
-            #  thunderbird
-            python3
+            android-tools
+            openjdk17
             dotnet-sdk_8
-            gcc
-            gdb
-            clang
             texliveFull
-            vscode
-            cmake
-            gnumake
-            pkg-config
-            git
+            vscodium
             rustc
+            rustPlatform.rustLibSrc
+            rust-analyzer
+            rustlings
             cargo
+            gcc
+            clang
+            cmake
+            pkg-config
+            gnumake
+            gdb
+            watchman
+            python3
         ];
     };
 
-    # Install firefox.
-    programs.firefox.enable = true;
+    # interop
+    programs.nix-ld.enable = true;
+    programs.fish.enable = true;
+    environment.shells = [ pkgs.fish ];
 
-    # Allow unfree packages
+    # firefox with fx-autoconfig for userChromeJS support
+    programs.firefox = {
+        enable = true;
+        package = pkgs.firefox.overrideAttrs (old: {
+            fxAutoconfig = pkgs.fetchFromGitHub {
+                owner = "MrOtherGuy";
+                repo = "fx-autoconfig";
+                rev = "dfdab5684faffc112b76ccb1d8cab7f75da0102c";
+                sha256 = "0kjqpn49kqwg80vdfqr5d6w1pspdwl0lbb5xdn59ikgwy3ysv4vf";
+            };
+            buildCommand = (old.buildCommand or "") + ''
+                cp "$fxAutoconfig/program/config.js" "$out/lib/firefox/config.js"
+                mkdir -p "$out/lib/firefox/defaults/pref"
+                cp "$fxAutoconfig/program/defaults/pref/config-prefs.js" "$out/lib/firefox/defaults/pref/config-prefs.js"
+            '';
+        });
+        nativeMessagingHosts.packages = [ pkgs.firefoxpwa ];
+    };
+
+    programs.gnupg.agent = {
+        enable = true;
+        # enableSSHSupport = true;
+    };
+
+    # unlock the same gnome keyring for gdm sessions
+    security.pam.services.gdm-password.enableGnomeKeyring = true;
+
+    # nix
     nixpkgs.config.allowUnfree = true;
-  
-    # Enable Flakes
-    nix.settings.experimental-features = [ "nix-command" "flakes" ];
 
-    # List packages installed in system profile. To search, run:
-    # $ nix search wget
-    environment.systemPackages = with pkgs; [
-        #  vim # Do not forget to add an editor to edit configuration.nix! The Nano editor is also installed by default.
-        #  wget
+    # node 20 reached eol; keep it to satisfy legacy deps
+    nixpkgs.config.permittedInsecurePackages = [
+        "nodejs-20.20.2"
     ];
 
-    fonts.packages = with pkgs; [
-        fira-code           # Fira Code
-        jetbrains-mono      # JetBrains Mono
+    nix.settings.experimental-features = [ "nix-command" "flakes" ];
 
-        # Nerd‑patched versions
+    # system packages
+    environment.systemPackages = with pkgs; [
+        pkgs.firefoxpwa
+
+        # sway screenshot tooling
+        pkgs.grim
+        pkgs.slurp
+    ];
+
+    # fonts
+    fonts.packages = with pkgs; [
+        noto-fonts
+        noto-fonts-cjk-sans
+        noto-fonts-cjk-serif
+        noto-fonts-color-emoji
+        liberation_ttf
+        fira-code
+        jetbrains-mono
+
         nerd-fonts.fira-code
         nerd-fonts.jetbrains-mono
+        nerd-fonts.geist-mono
 
-        # Optional additional programming fonts
         source-code-pro
         hack-font
         inconsolata
@@ -135,35 +211,26 @@
         cascadia-code
         ibm-plex
         googlesans-code
-        source-code-pro
+        geist-font
     ];
 
-    # Some programs need SUID wrappers, can be configured further or are
-    # started in user sessions.
-    # programs.mtr.enable = true;
-    # programs.gnupg.agent = {
-    #   enable = true;
-    #   enableSSHSupport = true;
-    # };
+    fonts.fontconfig = {
+        defaultFonts = {
+            serif = [ "Noto Serif" "Noto Serif Devanagari" ];
+            sansSerif = [ "Noto Sans" "Noto Sans Devanagari" ];
+            monospace = [ "JetBrainsMono Nerd Font" ];
+        };
+    };
 
+    # xdg portals
+    xdg.portal = {
+        enable = true;
+        extraPortals = [
+            pkgs.xdg-desktop-portal-wlr
+            pkgs.xdg-desktop-portal-gtk
+            pkgs.xdg-desktop-portal-gnome
+        ];
+    };
 
-    # List services that you want to enable:
-
-    # Enable the OpenSSH daemon.
-    # services.openssh.enable = true;
-
-    # Open ports in the firewall.
-    # networking.firewall.allowedTCPPorts = [ ... ];
-    # networking.firewall.allowedUDPPorts = [ ... ];
-    # Or disable the firewall altogether.
-    # networking.firewall.enable = false;
-
-    # This value determines the NixOS release from which the default
-    # settings for stateful data, like file locations and database versions
-    # on your system were taken. It‘s perfectly fine and recommended to leave
-    # this value at the release version of the first install of this system.
-    # Before changing this value read the documentation for this option
-    # (e.g. man configuration.nix or on https://nixos.org/nixos/options.html).
-    system.stateVersion = "25.11"; # Did you read the comment?
-
+    system.stateVersion = "25.11";
 }
